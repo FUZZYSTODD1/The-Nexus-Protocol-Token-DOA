@@ -1,0 +1,61 @@
+import json
+import os
+import subprocess
+
+
+def execute_withdraw_script(node_inline_code: str, timeout: int = 10) -> dict:
+    """Executes Node.js withdrawal code using raw Popen constructor.
+
+    Safely handles process isolation, timeouts, and error streams.
+    """
+    # Build the execution arguments matching your test runner setup
+    cmd = ["/usr/local/bin/node", "-e", node_inline_code]
+
+    # Use the Popen constructor inside a context manager for safe cleanup
+    with subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,  # Automatically decodes streams to strings instead of bytes
+        cwd=os.getcwd(),  # Ensures relative 'require("./withdraw.js")' resolves correctly
+    ) as process:
+        try:
+            # Safely converse with standard I/O channels without deadlocks
+            stdout, stderr = process.communicate(timeout=timeout)
+
+        except subprocess.TimeoutExpired:
+            process.kill()
+            # Windows/POSIX adjustment to ensure trailing buffers are flushed
+            stdout, stderr = process.communicate()
+            return {
+                "success": False,
+                "error": "Process timed out",
+                "stdout": stdout,
+                "stderr": stderr,
+                "exit_code": process.returncode,
+            }
+        except Exception as e:
+            process.kill()
+            return {"success": False, "error": f"Execution failed: {str(e)}"}
+
+        # Evaluate the execution lifecycle results
+        if process.returncode != 0:
+            return {
+                "success": False,
+                "error": f"Node exited with status {process.returncode}",
+                "stdout": stdout,
+                "stderr": stderr,
+                "exit_code": process.returncode,
+            }
+
+        # Attempt to clean parse the dynamic payload returned by console.log
+        try:
+            parsed_payload = json.loads(stdout.strip())
+            return {"success": True, "data": parsed_payload, "stderr": stderr}
+        except json.JSONDecodeError:
+            return {
+                "success": False,
+                "error": "Stdout was not valid JSON structural payload",
+                "stdout": stdout,
+                "stderr": stderr,
+            }
